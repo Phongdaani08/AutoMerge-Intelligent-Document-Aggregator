@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+sqlalchemy
+pandas
+openpyxl
+python-multipart
+pydantic
+pydantic-settings
+psycopg2-binary
+python-jose[cryptography]
