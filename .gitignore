@@ -40,3 +40,6 @@ uploads/
 *.csv
 *.xlsx
 *.xls
+
+# Temporary testing/debug files
+Testting/
