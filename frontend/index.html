@@ -1,26 +1,78 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AutoMerge Preview</title>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; background-color: #f5f5f5; }
-        .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .upload-section { margin-bottom: 30px; padding: 20px; border: 2px dashed #ccc; text-align: center; border-radius: 8px; }
-        button { background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; }
-        button:hover { background-color: #0056b3; }
-        pre { background: #f8f9fa; padding: 15px; border-radius: 5px; overflow-x: auto; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        th { background-color: #f2f2f2; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .upload-section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 2px dashed #ccc;
+            text-align: center;
+            border-radius: 8px;
+        }
+
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        pre {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        th,
+        td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+
+        th {
+            background-color: #f2f2f2;
+        }
     </style>
 </head>
+
 <body>
     <div class="container">
-        <h1>AutoMerge Document Aggregator 🚀</h1>
+        <h1>AutoMerge Document Aggregator </h1>
         <p>Simple File Upload & Preview (Safe Zone)</p>
-        
+
         <div class="upload-section">
             <input type="file" id="fileInput" accept=".csv, .xlsx, .xls">
             <button onclick="uploadFile()">Upload File</button>
@@ -38,7 +90,7 @@
         async function uploadFile() {
             const fileInput = document.getElementById('fileInput');
             const status = document.getElementById('uploadStatus');
-            
+
             if (!fileInput.files[0]) {
                 status.innerText = "Please select a file first.";
                 return;
@@ -54,9 +106,9 @@
                     method: 'POST',
                     body: formData
                 });
-                
+
                 const result = await response.json();
-                
+
                 if (response.ok) {
                     status.innerHTML = `<span style="color: green;">Success! File ID: ${result.file_id}</span>`;
                     setTimeout(() => fetchPreview(result.file_id), 1000); // Wait a bit for processing
@@ -75,14 +127,14 @@
                     const result = await response.json();
                     document.getElementById('previewSection').style.display = 'block';
                     document.getElementById('jsonPreview').innerText = JSON.stringify(result.preview, null, 2);
-                    
+
                     // Render simple table
                     if (result.preview.length > 0) {
                         const keys = Object.keys(result.preview[0]);
                         let tableHTML = '<table><tr>';
                         keys.forEach(k => tableHTML += `<th>${k}</th>`);
                         tableHTML += '</tr>';
-                        
+
                         result.preview.forEach(row => {
                             tableHTML += '<tr>';
                             keys.forEach(k => tableHTML += `<td>${row[k] !== null ? row[k] : ''}</td>`);
@@ -98,4 +150,5 @@
         }
     </script>
 </body>
+
 </html>

@@ -1,16 +1,32 @@
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from sqlalchemy import inspect
 from typing import List
+import hashlib
+import json
 
 from config.settings import settings
 from utils.logger import logger
-from storage.database import engine, Base, get_db
+from storage.database import engine, Base, get_db, SessionLocal
 from storage.models import RawFile, RawData
 from ingestion.file_parser import parse_file_to_json
 
-# Create DB tables
-Base.metadata.create_all(bind=engine)
+# Auto-Sync Database Schema (Local Dev / SQLite only)
+def init_db():
+    inspector = inspect(engine)
+    # Check if table exists
+    if inspector.has_table("raw_files"):
+        columns = [col['name'] for col in inspector.get_columns("raw_files")]
+        # Detect if our new 'file_hash' column is missing
+        if "file_hash" not in columns:
+            logger.warning("Database schema mismatch detected -> recreating DB")
+            Base.metadata.drop_all(bind=engine)
+            
+    # Create tables (will only create if they don't exist)
+    Base.metadata.create_all(bind=engine)
+
+init_db()
 
 app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION)
 
@@ -45,8 +61,15 @@ async def upload_file(
     if len(content) > settings.MAX_UPLOAD_SIZE:
         raise HTTPException(status_code=400, detail="File too large")
 
-    # 3. Create RawFile record
-    db_file = RawFile(file_name=file.filename, source="manual")
+    # 3. Check for Duplicate File (File-Level Deduplication)
+    file_hash = hashlib.sha256(content).hexdigest()
+    existing_file = db.query(RawFile).filter(RawFile.file_hash == file_hash).first()
+    if existing_file:
+        logger.warning(f"Duplicate file upload attempt rejected: {file.filename} (Hash: {file_hash})")
+        raise HTTPException(status_code=409, detail=f"File already exists with ID: {existing_file.id}")
+
+    # 4. Create RawFile record
+    db_file = RawFile(file_name=file.filename, file_hash=file_hash, source="manual")
     db.add(db_file)
     db.commit()
     db.refresh(db_file)
@@ -54,26 +77,41 @@ async def upload_file(
     logger.info("FILE SAVED")
     logger.info(f"[UPLOAD] Saved file record ID {db_file.id} for {file.filename}")
 
-    # 4. Background Processing (Temporarily Disabled for Debugging)
-    # background_tasks.add_task(process_uploaded_file, db_file.id, content, file.filename, db)
-    process_uploaded_file(db_file.id, content, file.filename, db)
+    # 4. Background Processing
+    background_tasks.add_task(process_uploaded_file, db_file.id, content, file.filename)
 
     return {"message": "File uploaded successfully", "file_id": db_file.id}
 
-def process_uploaded_file(file_id: int, content: bytes, filename: str, db: Session):
+def process_uploaded_file(file_id: int, content: bytes, filename: str):
     logger.info("START PROCESSING")
     logger.info(f"START PROCESSING FILE {file_id}")
+    
+    # 1. Background Task Isolation (CRITICAL)
+    db = SessionLocal()
+    
     try:
-        # Parse to JSON
+        # Parse and Clean to JSON
         records = parse_file_to_json(content, filename)
         
-        # Save to RawData
-        inserted_rows = 0
+        # Save to RawData using Bulk Insert and Row-Level Hashing
+        valid_objects = []
+        seen_hashes = set()
+        
         for record in records:
-            if record: # Validate data is not empty
-                db_data = RawData(file_id=file_id, json_data=record)
-                db.add(db_data)
-                inserted_rows += 1
+            # Deterministic hash for the row dictionary
+            row_hash = hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
+            
+            # 2. Row-Level Deduplication (MUST NOT CRASH)
+            if row_hash in seen_hashes:
+                continue
+            seen_hashes.add(row_hash)
+            
+            valid_objects.append(RawData(file_id=file_id, row_hash=row_hash, json_data=record))
+            
+        if valid_objects:
+            db.bulk_save_objects(valid_objects)
+            
+        inserted_rows = len(valid_objects)
         
         # Update status
         db_file = db.query(RawFile).filter(RawFile.id == file_id).first()
@@ -81,11 +119,12 @@ def process_uploaded_file(file_id: int, content: bytes, filename: str, db: Sessi
             db_file.status = "completed"
             
         db.commit()
-        logger.info(f"INSERTED {inserted_rows} ROWS INTO raw_data FOR file_id={file_id}")
+        logger.info(f"INSERTED {inserted_rows} ROWS INTO raw_data FOR file_id={file_id} (Bulk Insert)")
         logger.info(f"FINISHED PROCESSING FILE {file_id}")
         logger.info("PREVIEW READY")
         
     except Exception as e:
+        db.rollback() # <--- CRITICAL FIX: Ensure clean session on error
         logger.error(f"[ERROR] Failed processing file ID {file_id}: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
@@ -94,8 +133,13 @@ def process_uploaded_file(file_id: int, content: bytes, filename: str, db: Sessi
         if db_file:
             db_file.status = "failed"
             db.commit()
-        # Raise HTTPException to prevent silent failure during direct call
-        raise HTTPException(status_code=500, detail=f"Pipeline error: {str(e)}")
+            
+        raise HTTPException(
+            status_code=500, 
+            detail="ไม่สามารถประมวลผลไฟล์ได้ กรุณาตรวจสอบข้อมูล (ERR-5001)"
+        )
+    finally:
+        db.close()
 
 @app.get("/api/v1/preview/{file_id}")
 def preview_data(file_id: int, db: Session = Depends(get_db)):
