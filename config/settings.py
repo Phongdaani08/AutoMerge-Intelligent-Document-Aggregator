@@ -5,8 +5,8 @@ class Settings(BaseSettings):
     VERSION: str = "0.1.0"
     
     # Database
-    DATABASE_URL: str = "sqlite:///./automerge_raw.db" # Fallback to sqlite for dev if postgres not ready
-    
+    # DATABASE_URL: str = "sqlite:///./automerge_raw.db" # Fallback to sqlite for dev if postgres not ready
+    DATABASE_URL :str = "postgresql://postgres:1234@localhost:5433/automerge_raw"
     # Security
     SECRET_KEY: str = "supersecretkey-change-in-production"
     ALGORITHM: str = "HS256"
