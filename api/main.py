@@ -187,7 +187,7 @@ def process_uploaded_file(file_id: int, file_path: str, filename: str):
                 logger.error(f"Failed to clean temp file {file_path}: {str(e)}")
 @app.get("/api/v1/preview/{file_id}")
 def preview_data(file_id: int, db: Session = Depends(get_db)):
-    data = db.query(RawData).filter(RawData.file_id == file_id).limit(10).all()
+    data = db.query(RawData).filter(RawData.file_id == file_id).order_by(RawData.id.asc()).limit(10).all()
     if not data:
         raise HTTPException(status_code=404, detail="Data not found")
     return {"file_id": file_id, "preview": [d.json_data for d in data]}

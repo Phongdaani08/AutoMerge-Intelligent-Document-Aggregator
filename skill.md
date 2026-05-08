@@ -214,6 +214,22 @@ Production Risk Note (Anti-Pattern):
 - 🚫 **Fake 422 Panic:** Developers debugging `422` errors from Swagger might wrongly assume the Backend is broken and attempt to rewrite the `UploadFile` endpoint logic, violating stable architecture.
 - 🚫 **Fake 409 Panic:** Developers getting `409` might think the upload failed and attempt to remove Hash-based deduplication (`skill.md` Core Invariant).
 
+### Nondeterministic Query Ordering Panic
+Symptoms:
+- Data preview or DB clients (like DBeaver) show rows out of logical insertion sequence (e.g., DF_007 appears before DF_001).
+- Developers panic, assuming the ingestion pipeline corrupted the order of the original file.
+
+Root Cause:
+- PostgreSQL (and most relational databases) does NOT guarantee row return order for `SELECT` queries without an explicit `ORDER BY`.
+- Due to the Free Space Map (FSM) and Multi-Version Concurrency Control (MVCC), bulk-inserted rows may be stored in fragmented empty physical slots left over from previous deleted records (e.g., from rollback tests or rejected deduplications).
+
+Correct Fix & Reusable Debugging Workflow:
+- **Testing Ingestion Order:** ALWAYS verify insertion order by looking at the Auto-Increment Primary Key (`id`). If `id` sequences chronologically map to the source document, the ingestion pipeline is 100% correct.
+- **Fixing Visual Order:** Add `.order_by(RawData.id.asc())` exclusively to the Read/Query API endpoints.
+
+Production Risk Note (Anti-Pattern):
+- 🚫 **Ingestion Rewrite Panic:** Do NOT attempt to "fix" the parsing or insertion logic when rows appear out of order in a basic `SELECT`. Modifying the robust ingestion pipeline to fix a purely visual query issue is a dangerous anti-pattern that risks breaking rollback safety and chunked processing.
+
 ### Excel Encoding Issue
 Symptoms:
 - Thai characters corrupted
