@@ -74,8 +74,8 @@
         <p>Simple File Upload & Preview (Safe Zone)</p>
 
         <div class="upload-section">
-            <input type="file" id="fileInput" accept=".csv, .xlsx, .xls">
-            <button onclick="uploadFile()">Upload File</button>
+            <input type="file" id="fileInput" accept=".csv, .xlsx, .xls" multiple>
+            <button onclick="uploadFile()">Upload Files</button>
             <p id="uploadStatus"></p>
         </div>
 
@@ -91,13 +91,15 @@
             const fileInput = document.getElementById('fileInput');
             const status = document.getElementById('uploadStatus');
 
-            if (!fileInput.files[0]) {
-                status.innerText = "Please select a file first.";
+            if (fileInput.files.length === 0) {
+                status.innerText = "Please select at least one file.";
                 return;
             }
 
             const formData = new FormData();
-            formData.append("file", fileInput.files[0]);
+            for (let i = 0; i < fileInput.files.length; i++) {
+                formData.append("files", fileInput.files[i]);
+            }
 
             status.innerText = "Uploading...";
 
@@ -110,8 +112,13 @@
                 const result = await response.json();
 
                 if (response.ok) {
-                    status.innerHTML = `<span style="color: green;">Success! File ID: ${result.file_id}</span>`;
-                    setTimeout(() => fetchPreview(result.file_id), 1000); // Wait a bit for processing
+                    let fileIds = result.files.map(f => f.id).join(', ');
+                    status.innerHTML = `<span style="color: green;">Success! Uploaded ${result.files.length} file(s). IDs: ${fileIds}</span>`;
+                    
+                    // Preview the first file for simplicity
+                    if (result.files.length > 0) {
+                        setTimeout(() => fetchPreview(result.files[0].id), 1000); 
+                    }
                 } else {
                     status.innerHTML = `<span style="color: red;">Error: ${result.detail}</span>`;
                 }

@@ -24,16 +24,16 @@ def clean_and_validate_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     return cleaned_row
 
-def parse_file_to_json(file_content: bytes, file_name: str) -> List[Dict[str, Any]]:
+def parse_file_to_json(file_path: str, file_name: str) -> List[Dict[str, Any]]:
     """
     Generic file parser: Reads Excel/CSV and returns a list of dictionaries.
     """
-    logger.info(f"Starting to parse file: {file_name}")
+    logger.info(f"Starting to parse file: {file_name} from {file_path}")
     try:
         if file_name.endswith('.csv'):
-            df = pd.read_csv(io.BytesIO(file_content))
+            df = pd.read_csv(file_path)
         elif file_name.endswith(('.xls', '.xlsx')):
-            df = pd.read_excel(io.BytesIO(file_content))
+            df = pd.read_excel(file_path)
         else:
             raise ValueError(f"Unsupported file format: {file_name}")
         

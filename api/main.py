@@ -5,6 +5,9 @@ from sqlalchemy import inspect
 from typing import List
 import hashlib
 import json
+import os
+import tempfile
+import shutil
 
 from config.settings import settings
 from utils.logger import logger
@@ -42,47 +45,75 @@ app.add_middleware(
 def read_root():
     return {"message": "Welcome to AutoMerge API"}
 
-#  รับไฟล์จากผู้ใช้
+#  รับไฟล์จากผู้ใช้แบบ Multi-File
 @app.post("/api/v1/upload")  
 async def upload_file(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...), 
+    files: List[UploadFile] = File(...), 
     db: Session = Depends(get_db)
 ):
-    logger.info("UPLOAD RECEIVED")
-    # 1. Validate Extension
-    import os
-    _, ext = os.path.splitext(file.filename)
-    if ext.lower() not in settings.ALLOWED_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Invalid file type")
-
-    # 2. Read File
-    content = await file.read()
-    if len(content) > settings.MAX_UPLOAD_SIZE:
-        raise HTTPException(status_code=400, detail="File too large")
-
-    # 3. Check for Duplicate File (File-Level Deduplication)
-    file_hash = hashlib.sha256(content).hexdigest()
-    existing_file = db.query(RawFile).filter(RawFile.file_hash == file_hash).first()
-    if existing_file:
-        logger.warning(f"Duplicate file upload attempt rejected: {file.filename} (Hash: {file_hash})")
-        raise HTTPException(status_code=409, detail=f"File already exists with ID: {existing_file.id}")
-
-    # 4. Create RawFile record
-    db_file = RawFile(file_name=file.filename, file_hash=file_hash, source="manual")
-    db.add(db_file)
-    db.commit()
-    db.refresh(db_file)
+    logger.info(f"UPLOAD RECEIVED: {len(files)} files")
     
-    logger.info("FILE SAVED")
-    logger.info(f"[UPLOAD] Saved file record ID {db_file.id} for {file.filename}")
+    saved_files = []
+    
+    # Process all files
+    for file in files:
+        # 1. Validate Extension
+        _, ext = os.path.splitext(file.filename)
+        if ext.lower() not in settings.ALLOWED_EXTENSIONS:
+            raise HTTPException(status_code=400, detail=f"Invalid file type: {file.filename}")
 
-    # 4. Background Processing
-    background_tasks.add_task(process_uploaded_file, db_file.id, content, file.filename)
+        # 2. Stream to Temp File & Calculate Hash Safely
+        temp_fd, temp_path = tempfile.mkstemp(suffix=ext, prefix="automerge_")
+        
+        file_size = 0
+        sha256_hash = hashlib.sha256()
+        
+        try:
+            with os.fdopen(temp_fd, 'wb') as f_out:
+                while chunk := await file.read(8192):
+                    file_size += len(chunk)
+                    if file_size > settings.MAX_UPLOAD_SIZE:
+                        os.remove(temp_path)
+                        raise HTTPException(status_code=400, detail=f"File too large: {file.filename}")
+                    
+                    sha256_hash.update(chunk)
+                    f_out.write(chunk)
+                    
+            file_hash = sha256_hash.hexdigest()
+            
+            # 3. Check for Duplicate File (File-Level Deduplication)
+            existing_file = db.query(RawFile).filter(RawFile.file_hash == file_hash).first()
+            if existing_file:
+                logger.warning(f"Duplicate file upload attempt rejected: {file.filename} (Hash: {file_hash})")
+                os.remove(temp_path)
+                raise HTTPException(status_code=409, detail=f"File already exists with ID: {existing_file.id} (Filename: {file.filename})")
 
-    return {"message": "File uploaded successfully", "file_id": db_file.id}
+            # 4. Create RawFile record
+            db_file = RawFile(file_name=file.filename, file_hash=file_hash, source="manual")
+            db.add(db_file)
+            db.commit()
+            db.refresh(db_file)
+            
+            saved_files.append({"id": db_file.id, "filename": file.filename, "temp_path": temp_path})
+            
+            logger.info(f"[UPLOAD] Saved file record ID {db_file.id} for {file.filename}")
+            
+        except Exception as e:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise e
 
-def process_uploaded_file(file_id: int, content: bytes, filename: str):
+    # 5. Background Processing (Per File)
+    for sf in saved_files:
+        background_tasks.add_task(process_uploaded_file, sf["id"], sf["temp_path"], sf["filename"])
+
+    return {
+        "message": f"{len(saved_files)} file(s) uploaded successfully", 
+        "files": [{"id": sf["id"], "filename": sf["filename"]} for sf in saved_files]
+    }
+
+def process_uploaded_file(file_id: int, file_path: str, filename: str):
     logger.info("START PROCESSING")
     logger.info(f"START PROCESSING FILE {file_id}")
     
@@ -91,11 +122,12 @@ def process_uploaded_file(file_id: int, content: bytes, filename: str):
     
     try:
         # Parse and Clean to JSON
-        records = parse_file_to_json(content, filename)
+        records = parse_file_to_json(file_path, filename)
         
         # Save to RawData using Bulk Insert and Row-Level Hashing
         valid_objects = []
         seen_hashes = set()
+        inserted_rows = 0
         
         for record in records:
             # Deterministic hash for the row dictionary
@@ -108,10 +140,16 @@ def process_uploaded_file(file_id: int, content: bytes, filename: str):
             
             valid_objects.append(RawData(file_id=file_id, row_hash=row_hash, json_data=record))
             
+            # 3. Chunk-Safe Insert
+            if len(valid_objects) >= 5000:
+                db.bulk_save_objects(valid_objects)
+                inserted_rows += len(valid_objects)
+                valid_objects.clear()
+                
         if valid_objects:
             db.bulk_save_objects(valid_objects)
-            
-        inserted_rows = len(valid_objects)
+            inserted_rows += len(valid_objects)
+            valid_objects.clear()
         
         # Update status
         db_file = db.query(RawFile).filter(RawFile.id == file_id).first()
@@ -140,7 +178,13 @@ def process_uploaded_file(file_id: int, content: bytes, filename: str):
         )
     finally:
         db.close()
-
+        # 4. Cleanup Temp File
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                logger.info(f"Cleaned up temp file: {file_path}")
+            except Exception as e:
+                logger.error(f"Failed to clean temp file {file_path}: {str(e)}")
 @app.get("/api/v1/preview/{file_id}")
 def preview_data(file_id: int, db: Session = Depends(get_db)):
     data = db.query(RawData).filter(RawData.file_id == file_id).limit(10).all()
