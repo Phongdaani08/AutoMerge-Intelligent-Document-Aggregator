@@ -8,12 +8,13 @@ import json
 import os
 import tempfile
 import shutil
+import asyncio
 
 from config.settings import settings
 from utils.logger import logger
 from storage.database import engine, Base, get_db, SessionLocal
 from storage.models import RawFile, RawData
-from ingestion.file_parser import parse_file_to_json
+from ingestion.file_parser import parse_file_in_chunks
 
 # Auto-Sync Database Schema (Local Dev / SQLite only)
 def init_db():
@@ -56,64 +57,95 @@ async def upload_file(
     
     saved_files = []
     
-    # Process all files
-    for file in files:
-        # 1. Validate Extension
-        _, ext = os.path.splitext(file.filename)
-        if ext.lower() not in settings.ALLOWED_EXTENSIONS:
-            raise HTTPException(status_code=400, detail=f"Invalid file type: {file.filename}")
+    try:
+        # Process all files
+        for file in files:
+            # 1. Validate Extension
+            _, ext = os.path.splitext(file.filename)
+            if ext.lower() not in settings.ALLOWED_EXTENSIONS:
+                raise HTTPException(status_code=400, detail=f"Invalid file type: {file.filename}")
 
-        # 2. Stream to Temp File & Calculate Hash Safely
-        temp_fd, temp_path = tempfile.mkstemp(suffix=ext, prefix="automerge_")
-        
-        file_size = 0
-        sha256_hash = hashlib.sha256()
-        
-        try:
-            with os.fdopen(temp_fd, 'wb') as f_out:
-                while chunk := await file.read(8192):
-                    file_size += len(chunk)
-                    if file_size > settings.MAX_UPLOAD_SIZE:
+            # 2. Stream to Temp File & Calculate Hash Safely
+            temp_fd, temp_path = tempfile.mkstemp(suffix=ext, prefix="automerge_")
+            
+            file_size = 0
+            sha256_hash = hashlib.sha256()
+            
+            try:
+                with os.fdopen(temp_fd, 'wb') as f_out:
+                    while chunk := await file.read(8192):
+                        file_size += len(chunk)
+                        if file_size > settings.MAX_UPLOAD_SIZE:
+                            # Do NOT delete file here, exit 'with' block cleanly to release OS lock
+                            raise HTTPException(status_code=400, detail=f"File too large: {file.filename}")
+                        
+                        sha256_hash.update(chunk)
+                        f_out.write(chunk)
+                        
+                file_hash = sha256_hash.hexdigest()
+                
+                # 3. Check for Duplicate File (File-Level Deduplication)
+                existing_file = db.query(RawFile).filter(RawFile.file_hash == file_hash).first()
+                if existing_file:
+                    logger.warning(f"Duplicate file upload attempt rejected: {file.filename} (Hash: {file_hash})")
+                    raise HTTPException(status_code=409, detail=f"File already exists with ID: {existing_file.id} (Filename: {file.filename})")
+
+                # 4. Create RawFile record
+                db_file = RawFile(file_name=file.filename, file_hash=file_hash, source="manual")
+                db.add(db_file)
+                db.commit()
+                db.refresh(db_file)
+                
+                saved_files.append({"id": db_file.id, "filename": file.filename, "temp_path": temp_path})
+                
+                logger.info(f"[UPLOAD] Saved file record ID {db_file.id} for {file.filename}")
+                
+            except Exception as inner_e:
+                # Cleanup the current failed file before raising
+                if os.path.exists(temp_path):
+                    try:
                         os.remove(temp_path)
-                        raise HTTPException(status_code=400, detail=f"File too large: {file.filename}")
-                    
-                    sha256_hash.update(chunk)
-                    f_out.write(chunk)
-                    
-            file_hash = sha256_hash.hexdigest()
-            
-            # 3. Check for Duplicate File (File-Level Deduplication)
-            existing_file = db.query(RawFile).filter(RawFile.file_hash == file_hash).first()
-            if existing_file:
-                logger.warning(f"Duplicate file upload attempt rejected: {file.filename} (Hash: {file_hash})")
-                os.remove(temp_path)
-                raise HTTPException(status_code=409, detail=f"File already exists with ID: {existing_file.id} (Filename: {file.filename})")
+                    except Exception as clean_err:
+                        logger.error(f"Failed to clean temp file {temp_path}: {clean_err}")
+                raise inner_e
 
-            # 4. Create RawFile record
-            db_file = RawFile(file_name=file.filename, file_hash=file_hash, source="manual")
-            db.add(db_file)
-            db.commit()
-            db.refresh(db_file)
-            
-            saved_files.append({"id": db_file.id, "filename": file.filename, "temp_path": temp_path})
-            
-            logger.info(f"[UPLOAD] Saved file record ID {db_file.id} for {file.filename}")
-            
-        except Exception as e:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            raise e
+        # 5. Background Processing (Per File)
+        for sf in saved_files:
+            background_tasks.add_task(process_uploaded_file, sf["id"], sf["temp_path"], sf["filename"])
 
-    # 5. Background Processing (Per File)
-    for sf in saved_files:
-        background_tasks.add_task(process_uploaded_file, sf["id"], sf["temp_path"], sf["filename"])
+        return {
+            "message": f"{len(saved_files)} file(s) uploaded successfully", 
+            "files": [{"id": sf["id"], "filename": sf["filename"]} for sf in saved_files]
+        }
 
-    return {
-        "message": f"{len(saved_files)} file(s) uploaded successfully", 
-        "files": [{"id": sf["id"], "filename": sf["filename"]} for sf in saved_files]
-    }
+    except Exception as outer_e:
+        # If the endpoint fails for any reason (e.g. file 3 of 5 fails validation),
+        # we must clean up temp files for files 1 and 2, because BackgroundTasks will NEVER run.
+        for sf in saved_files:
+            if os.path.exists(sf["temp_path"]):
+                try:
+                    os.remove(sf["temp_path"])
+                except Exception as clean_err:
+                    logger.error(f"Failed to clean orphaned temp file {sf['temp_path']}: {clean_err}")
+        raise outer_e
 
-def process_uploaded_file(file_id: int, file_path: str, filename: str):
+# Global semaphore for Phase 1 Concurrency Governance
+ingestion_semaphore = None
+
+def get_ingestion_semaphore():
+    global ingestion_semaphore
+    if ingestion_semaphore is None:
+        ingestion_semaphore = asyncio.Semaphore(2)
+    return ingestion_semaphore
+
+async def process_uploaded_file(file_id: int, file_path: str, filename: str):
+    sem = get_ingestion_semaphore()
+    logger.info(f"Task for file {file_id} queued. Waiting for semaphore...")
+    async with sem:
+        logger.info(f"Semaphore acquired for file {file_id}. Starting background thread...")
+        await asyncio.to_thread(process_uploaded_file_sync, file_id, file_path, filename)
+
+def process_uploaded_file_sync(file_id: int, file_path: str, filename: str):
     logger.info("START PROCESSING")
     logger.info(f"START PROCESSING FILE {file_id}")
     
@@ -121,35 +153,30 @@ def process_uploaded_file(file_id: int, file_path: str, filename: str):
     db = SessionLocal()
     
     try:
-        # Parse and Clean to JSON
-        records = parse_file_to_json(file_path, filename)
-        
-        # Save to RawData using Bulk Insert and Row-Level Hashing
-        valid_objects = []
         seen_hashes = set()
         inserted_rows = 0
         
-        for record in records:
-            # Deterministic hash for the row dictionary
-            row_hash = hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
+        # Parse and Clean in chunks
+        for records_chunk in parse_file_in_chunks(file_path, filename):
+            valid_objects = []
             
-            # 2. Row-Level Deduplication (MUST NOT CRASH)
-            if row_hash in seen_hashes:
-                continue
-            seen_hashes.add(row_hash)
-            
-            valid_objects.append(RawData(file_id=file_id, row_hash=row_hash, json_data=record))
-            
+            for record in records_chunk:
+                # Deterministic hash for the row dictionary
+                row_hash = hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
+                
+                # 2. Row-Level Deduplication (MUST NOT CRASH)
+                if row_hash in seen_hashes:
+                    continue
+                seen_hashes.add(row_hash)
+                
+                valid_objects.append(RawData(file_id=file_id, row_hash=row_hash, json_data=record))
+                
             # 3. Chunk-Safe Insert
-            if len(valid_objects) >= 5000:
+            if valid_objects:
                 db.bulk_save_objects(valid_objects)
                 inserted_rows += len(valid_objects)
+                # clear list explicitly for memory safety
                 valid_objects.clear()
-                
-        if valid_objects:
-            db.bulk_save_objects(valid_objects)
-            inserted_rows += len(valid_objects)
-            valid_objects.clear()
         
         # Update status
         db_file = db.query(RawFile).filter(RawFile.id == file_id).first()
