@@ -22,11 +22,38 @@
         }
 
         .upload-section {
-            margin-bottom: 30px;
+            margin-bottom: 20px;
             padding: 20px;
             border: 2px dashed #ccc;
             text-align: center;
             border-radius: 8px;
+        }
+
+        .queue-section,
+        .uploaded-section {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #fdfdfd;
+            border: 1px solid #eee;
+            border-radius: 8px;
+        }
+
+        .queue-list {
+            list-style-type: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .queue-list li {
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .queue-list li:last-child {
+            border-bottom: none;
         }
 
         button {
@@ -40,6 +67,26 @@
 
         button:hover {
             background-color: #0056b3;
+        }
+
+        button.btn-danger {
+            background-color: #dc3545;
+            padding: 5px 10px;
+            font-size: 0.9em;
+        }
+
+        button.btn-danger:hover {
+            background-color: #c82333;
+        }
+
+        button.btn-info {
+            background-color: #17a2b8;
+            padding: 5px 10px;
+            font-size: 0.9em;
+        }
+
+        button.btn-info:hover {
+            background-color: #138496;
         }
 
         pre {
@@ -70,38 +117,91 @@
 
 <body>
     <div class="container">
-        <h1>AutoMerge Document Aggregator </h1>
+        <h1>AutoMerge Document Aggregator</h1>
         <p>Simple File Upload & Preview (Safe Zone)</p>
 
         <div class="upload-section">
-            <input type="file" id="fileInput" accept=".csv, .xlsx, .xls" multiple>
+            <input type="file" id="fileInput" accept=".csv, .xlsx, .xls" multiple onchange="handleFileSelect(event)">
             <button onclick="uploadFile()">Upload Files</button>
-            <p id="uploadStatus"></p>
+            <p id="uploadStatus" style="margin-top: 10px; font-weight: bold;"></p>
         </div>
 
-        <div id="previewSection" style="display: none;">
-            <h3>Data Preview (First 10 rows)</h3>
+        <div id="queueSection" class="queue-section" style="display: none;">
+            <h3>Selected Files Queue</h3>
+            <ul id="fileQueueList" class="queue-list"></ul>
+        </div>
+
+        <div id="uploadedSection" class="uploaded-section" style="display: none;">
+            <h3>Successfully Uploaded Files</h3>
+            <p style="font-size: 0.9em; color: #666;">Click Preview to view the first 10 rows of a specific file.</p>
+            <ul id="uploadedFileList" class="queue-list"></ul>
+        </div>
+
+        <div id="previewSection" style="display: none; margin-top: 30px;">
+            <h3 id="previewTitle">Data Preview</h3>
             <div id="tableContainer"></div>
             <pre id="jsonPreview"></pre>
         </div>
     </div>
 
     <script>
+        let selectedFiles = [];
+
+        function handleFileSelect(event) {
+            const newFiles = Array.from(event.target.files);
+            selectedFiles = selectedFiles.concat(newFiles);
+
+            // Clear input so same file can be selected again if removed
+            event.target.value = '';
+
+            renderQueue();
+        }
+
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            renderQueue();
+        }
+
+        function renderQueue() {
+            const section = document.getElementById('queueSection');
+            const list = document.getElementById('fileQueueList');
+
+            if (selectedFiles.length === 0) {
+                section.style.display = 'none';
+                return;
+            }
+
+            section.style.display = 'block';
+            list.innerHTML = '';
+
+            selectedFiles.forEach((file, index) => {
+                const li = document.createElement('li');
+                const sizeKB = (file.size / 1024).toFixed(2);
+
+                li.innerHTML = `
+                    <span><strong>${file.name}</strong> <span style="color:#888;">(${sizeKB} KB)</span></span>
+                    <button type="button" class="btn-danger" onclick="removeFile(${index})">Remove</button>
+                `;
+                list.appendChild(li);
+            });
+        }
+
         async function uploadFile() {
-            const fileInput = document.getElementById('fileInput');
             const status = document.getElementById('uploadStatus');
 
-            if (fileInput.files.length === 0) {
-                status.innerText = "Please select at least one file.";
+            if (selectedFiles.length === 0) {
+                status.style.color = "red";
+                status.innerText = "Please select at least one file from the queue.";
                 return;
             }
 
             const formData = new FormData();
-            for (let i = 0; i < fileInput.files.length; i++) {
-                formData.append("files", fileInput.files[i]);
+            for (let i = 0; i < selectedFiles.length; i++) {
+                formData.append("files", selectedFiles[i]);
             }
 
-            status.innerText = "Uploading...";
+            status.style.color = "blue";
+            status.innerText = "Uploading... Please wait.";
 
             try {
                 const response = await fetch('http://localhost:8000/api/v1/upload', {
@@ -112,48 +212,110 @@
                 const result = await response.json();
 
                 if (response.ok) {
-                    let fileIds = result.files.map(f => f.id).join(', ');
-                    status.innerHTML = `<span style="color: green;">Success! Uploaded ${result.files.length} file(s). IDs: ${fileIds}</span>`;
-                    
-                    // Preview the first file for simplicity
-                    if (result.files.length > 0) {
-                        setTimeout(() => fetchPreview(result.files[0].id), 1000); 
-                    }
+                    status.style.color = "green";
+                    status.innerText = `Success! Uploaded ${result.files.length} file(s).`;
+
+                    // Clear frontend queue
+                    selectedFiles = [];
+                    renderQueue();
+
+                    // Render uploaded files list
+                    renderUploadedFiles(result.files);
                 } else {
-                    status.innerHTML = `<span style="color: red;">Error: ${result.detail}</span>`;
+                    status.style.color = "red";
+                    status.innerText = "Error: " + (result.detail || "Unknown error");
                 }
             } catch (error) {
+                status.style.color = "red";
                 status.innerText = "Upload failed: " + error.message;
             }
         }
 
-        async function fetchPreview(fileId) {
-            try {
-                const response = await fetch(`http://localhost:8000/api/v1/preview/${fileId}`);
-                if (response.ok) {
-                    const result = await response.json();
-                    document.getElementById('previewSection').style.display = 'block';
-                    document.getElementById('jsonPreview').innerText = JSON.stringify(result.preview, null, 2);
+        let globalPreviews = {}; // Store previews by fileId
 
-                    // Render simple table
-                    if (result.preview.length > 0) {
-                        const keys = Object.keys(result.preview[0]);
-                        let tableHTML = '<table><tr>';
-                        keys.forEach(k => tableHTML += `<th>${k}</th>`);
-                        tableHTML += '</tr>';
+        function renderUploadedFiles(files) {
+            const section = document.getElementById('uploadedSection');
+            const list = document.getElementById('uploadedFileList');
 
-                        result.preview.forEach(row => {
-                            tableHTML += '<tr>';
-                            keys.forEach(k => tableHTML += `<td>${row[k] !== null ? row[k] : ''}</td>`);
-                            tableHTML += '</tr>';
-                        });
-                        tableHTML += '</table>';
-                        document.getElementById('tableContainer').innerHTML = tableHTML;
-                    }
+            section.style.display = 'block';
+            list.innerHTML = '';
+
+            files.forEach(file => {
+                // Store the instant preview in memory
+                if (file.preview) {
+                    globalPreviews[file.id] = file.preview;
                 }
-            } catch (error) {
-                console.error("Failed to fetch preview", error);
+
+                const li = document.createElement('li');
+                li.innerHTML = `
+                    <span><strong>${file.filename}</strong> (ID: ${file.id}) <span id="statusSpan_${file.id}" style="color: #888; font-size: 0.9em; margin-left: 10px;">Saving to DB...</span></span>
+                    <button type="button" class="btn-info" onclick="showPreview(${file.id}, '${file.filename}')">Preview</button>
+                `;
+                list.appendChild(li);
+
+                // Start polling for this file's status
+                startPolling(file.id);
+            });
+        }
+
+        async function startPolling(fileId) {
+            const span = document.getElementById(`statusSpan_${fileId}`);
+
+            const interval = setInterval(async () => {
+                try {
+                    const response = await fetch(`http://localhost:8000/api/v1/status/${fileId}`);
+                    if (response.ok) {
+                        const result = await response.json();
+                        if (result.status === "completed") {
+                            clearInterval(interval);
+                            span.innerText = "Saved to DB";
+                            span.style.color = "green";
+                        } else if (result.status === "failed") {
+                            clearInterval(interval);
+                            span.innerText = "DB Error (Rolled back)";
+                            span.style.color = "red";
+                        }
+                        // if "uploaded" or anything else, keep polling
+                    } else {
+                        clearInterval(interval);
+                        span.innerText = "Status Unknown";
+                        span.style.color = "red";
+                    }
+                } catch (error) {
+                    console.error(`Error polling status for ${fileId}:`, error);
+                }
+            }, 2000); // Check every 2 seconds
+        }
+
+        function showPreview(fileId, filename) {
+            const previewTitle = document.getElementById('previewTitle');
+            previewTitle.innerText = `Data Preview: ${filename} (First 10 rows)`;
+            document.getElementById('previewSection').style.display = 'block';
+            document.getElementById('tableContainer').innerHTML = '';
+            document.getElementById('jsonPreview').innerText = '';
+
+            const previewData = globalPreviews[fileId];
+
+            if (!previewData || previewData.length === 0) {
+                document.getElementById('tableContainer').innerHTML = '<p style="color:red;">No instant preview available for this file.</p>';
+                return;
             }
+
+            document.getElementById('jsonPreview').innerText = JSON.stringify(previewData, null, 2);
+
+            // Render simple table
+            const keys = Object.keys(previewData[0]);
+            let tableHTML = '<table><tr>';
+            keys.forEach(k => tableHTML += `<th>${k}</th>`);
+            tableHTML += '</tr>';
+
+            previewData.forEach(row => {
+                tableHTML += '<tr>';
+                keys.forEach(k => tableHTML += `<td>${row[k] !== null ? row[k] : ''}</td>`);
+                tableHTML += '</tr>';
+            });
+            tableHTML += '</table>';
+            document.getElementById('tableContainer').innerHTML = tableHTML;
         }
     </script>
 </body>

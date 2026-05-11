@@ -9,6 +9,7 @@ import os
 import tempfile
 import shutil
 import asyncio
+import pandas as pd
 
 from config.settings import settings
 from utils.logger import logger
@@ -96,7 +97,22 @@ async def upload_file(
                 db.commit()
                 db.refresh(db_file)
                 
-                saved_files.append({"id": db_file.id, "filename": file.filename, "temp_path": temp_path})
+                # Read first 10 rows for instant preview
+                preview_data = []
+                try:
+                    if file.filename.endswith('.csv'):
+                        df_preview = pd.read_csv(temp_path, nrows=10)
+                        # Replace NaN with None for JSON serialization
+                        df_preview = df_preview.where(pd.notnull(df_preview), None)
+                        preview_data = df_preview.to_dict(orient='records')
+                    elif file.filename.endswith(('.xls', '.xlsx')):
+                        df_preview = pd.read_excel(temp_path, nrows=10)
+                        df_preview = df_preview.where(pd.notnull(df_preview), None)
+                        preview_data = df_preview.to_dict(orient='records')
+                except Exception as e:
+                    logger.warning(f"Failed to generate instant preview for {file.filename}: {e}")
+                
+                saved_files.append({"id": db_file.id, "filename": file.filename, "temp_path": temp_path, "preview": preview_data})
                 
                 logger.info(f"[UPLOAD] Saved file record ID {db_file.id} for {file.filename}")
                 
@@ -115,7 +131,7 @@ async def upload_file(
 
         return {
             "message": f"{len(saved_files)} file(s) uploaded successfully", 
-            "files": [{"id": sf["id"], "filename": sf["filename"]} for sf in saved_files]
+            "files": [{"id": sf["id"], "filename": sf["filename"], "preview": sf.get("preview", [])} for sf in saved_files]
         }
 
     except Exception as outer_e:
@@ -218,3 +234,10 @@ def preview_data(file_id: int, db: Session = Depends(get_db)):
     if not data:
         raise HTTPException(status_code=404, detail="Data not found")
     return {"file_id": file_id, "preview": [d.json_data for d in data]}
+
+@app.get("/api/v1/status/{file_id}")
+def get_file_status(file_id: int, db: Session = Depends(get_db)):
+    db_file = db.query(RawFile).filter(RawFile.id == file_id).first()
+    if not db_file:
+        raise HTTPException(status_code=404, detail="File not found")
+    return {"file_id": file_id, "status": db_file.status}

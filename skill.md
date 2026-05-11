@@ -193,6 +193,24 @@ Avoid:
 
 ## Operational Learnings
 
+### High-Concurrency OOM & Network Timeout Panic
+Symptoms:
+- Server crashes with `MemoryError` or freezes when receiving multiple large CSV files simultaneously.
+- Client tests show high numbers of `Timeouts/Fails (0)` when firing 50+ concurrent upload requests.
+- Developers panic, assuming the Single-Node architecture is fundamentally broken and immediately try to install Celery, Redis, or Kafka.
+
+Root Cause:
+- **OOM Crash:** `pd.read_csv()` loads the entire file into RAM, and `df.to_json()` duplicates it, causing extreme memory amplification (e.g., a 50MB file consumes >1GB RAM).
+- **Timeouts:** Throwing 100 simultaneous POST requests at Uvicorn saturates the network socket and disk I/O, causing requests sitting in the OS queue to drop after 60 seconds.
+
+Correct Fix & Reusable Debugging Workflow:
+- **Fixing OOM (Memory-Safe Chunking):** Use `pd.read_csv(chunksize=5000)` and yield dictionaries natively via `to_dict('records')`. Explicitly call `.clear()` on object lists to force Garbage Collection.
+- **Fixing CPU Starvation (Concurrency Governance):** Implement a global `asyncio.Semaphore(2)` to gate the heavy background worker threads. This ensures only 2 files process concurrently, protecting RAM and DB pools without blocking the API loop.
+- **Fixing Network Timeouts (Client-Side Batching):** Do NOT blindly increase the `timeout=60` setting or configure infinite waits. Instead, refactor the Frontend to upload files in smaller logical batches (e.g., 5-10 files at a time).
+
+Production Risk Note (Anti-Pattern):
+- 🚫 **Distributed System Panic:** Do NOT introduce external brokers (Celery, Redis) to solve local OOM spikes. Always fix the memory amplification (via Chunking + Semaphore) first to maximize Single-Node efficiency.
+- 🚫 **Commit-Per-Chunk Anti-Pattern:** Do NOT put `db.commit()` inside the chunk loop to save memory. If a file fails on chunk 99, chunks 1-98 will be permanently orphaned in the DB, completely destroying Idempotency and Rollback guarantees. `db.commit()` MUST remain outside the chunk loop.
 ### Multi-File Upload Testing & Swagger UI Bug
 Symptoms:
 - Swagger UI (FastAPI `/docs`) renders `List[UploadFile]` as `array<string>`.
