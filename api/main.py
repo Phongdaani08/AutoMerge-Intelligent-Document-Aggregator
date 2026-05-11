@@ -57,39 +57,58 @@ async def upload_file(
     logger.info(f"UPLOAD RECEIVED: {len(files)} files")
     
     saved_files = []
+    results = []
+    success_count = 0
+    duplicate_count = 0
+    failed_count = 0
     
     try:
         # Process all files
         for file in files:
-            # 1. Validate Extension
-            _, ext = os.path.splitext(file.filename)
-            if ext.lower() not in settings.ALLOWED_EXTENSIONS:
-                raise HTTPException(status_code=400, detail=f"Invalid file type: {file.filename}")
-
-            # 2. Stream to Temp File & Calculate Hash Safely
-            temp_fd, temp_path = tempfile.mkstemp(suffix=ext, prefix="automerge_")
-            
-            file_size = 0
-            sha256_hash = hashlib.sha256()
-            
+            temp_path = None
             try:
+                # 1. Validate Extension
+                _, ext = os.path.splitext(file.filename)
+                if ext.lower() not in settings.ALLOWED_EXTENSIONS:
+                    results.append({"filename": file.filename, "status": "failed", "message": "Invalid file type"})
+                    failed_count += 1
+                    continue
+
+                # 2. Stream to Temp File & Calculate Hash Safely
+                temp_fd, temp_path = tempfile.mkstemp(suffix=ext, prefix="automerge_")
+                
+                file_size = 0
+                sha256_hash = hashlib.sha256()
+                
+                file_too_large = False
                 with os.fdopen(temp_fd, 'wb') as f_out:
                     while chunk := await file.read(8192):
                         file_size += len(chunk)
                         if file_size > settings.MAX_UPLOAD_SIZE:
-                            # Do NOT delete file here, exit 'with' block cleanly to release OS lock
-                            raise HTTPException(status_code=400, detail=f"File too large: {file.filename}")
+                            file_too_large = True
+                            break
                         
                         sha256_hash.update(chunk)
                         f_out.write(chunk)
-                        
+                
+                if file_too_large:
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                    results.append({"filename": file.filename, "status": "failed", "message": "File too large"})
+                    failed_count += 1
+                    continue
+                            
                 file_hash = sha256_hash.hexdigest()
                 
                 # 3. Check for Duplicate File (File-Level Deduplication)
                 existing_file = db.query(RawFile).filter(RawFile.file_hash == file_hash).first()
                 if existing_file:
                     logger.warning(f"Duplicate file upload attempt rejected: {file.filename} (Hash: {file_hash})")
-                    raise HTTPException(status_code=409, detail=f"File already exists with ID: {existing_file.id} (Filename: {file.filename})")
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                    results.append({"filename": file.filename, "status": "duplicate", "message": f"File already exists with ID: {existing_file.id}"})
+                    duplicate_count += 1
+                    continue
 
                 # 4. Create RawFile record
                 db_file = RawFile(file_name=file.filename, file_hash=file_hash, source="manual")
@@ -113,30 +132,35 @@ async def upload_file(
                     logger.warning(f"Failed to generate instant preview for {file.filename}: {e}")
                 
                 saved_files.append({"id": db_file.id, "filename": file.filename, "temp_path": temp_path, "preview": preview_data})
+                results.append({"filename": file.filename, "status": "success", "file_id": db_file.id, "preview": preview_data})
+                success_count += 1
                 
                 logger.info(f"[UPLOAD] Saved file record ID {db_file.id} for {file.filename}")
                 
             except Exception as inner_e:
-                # Cleanup the current failed file before raising
-                if os.path.exists(temp_path):
+                # Cleanup the current failed file
+                if temp_path and os.path.exists(temp_path):
                     try:
                         os.remove(temp_path)
                     except Exception as clean_err:
                         logger.error(f"Failed to clean temp file {temp_path}: {clean_err}")
-                raise inner_e
+                logger.error(f"Error processing file {file.filename}: {str(inner_e)}")
+                results.append({"filename": file.filename, "status": "failed", "message": "Internal error during upload"})
+                failed_count += 1
 
         # 5. Background Processing (Per File)
         for sf in saved_files:
             background_tasks.add_task(process_uploaded_file, sf["id"], sf["temp_path"], sf["filename"])
 
         return {
-            "message": f"{len(saved_files)} file(s) uploaded successfully", 
-            "files": [{"id": sf["id"], "filename": sf["filename"], "preview": sf.get("preview", [])} for sf in saved_files]
+            "success_count": success_count,
+            "duplicate_count": duplicate_count,
+            "failed_count": failed_count,
+            "results": results
         }
 
     except Exception as outer_e:
-        # If the endpoint fails for any reason (e.g. file 3 of 5 fails validation),
-        # we must clean up temp files for files 1 and 2, because BackgroundTasks will NEVER run.
+        # If the endpoint fails for any reason
         for sf in saved_files:
             if os.path.exists(sf["temp_path"]):
                 try:
