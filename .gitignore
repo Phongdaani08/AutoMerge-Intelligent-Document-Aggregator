@@ -43,3 +43,12 @@ uploads/
 
 # Temporary testing/debug files
 Testting/
+
+# Personal and internal documentation
+skill.md
+audit_report_big_o.md
+READING_GUIDE.md
+
+# Testing and temporary files
+testing/
+*.tmp
