@@ -19,8 +19,8 @@ function escapeHTML(str) {
 }
 
 // ================= STATE =================
-let selectedFiles = [];
-let globalPreviews = {}; // Store previews by fileId
+// [B3] ย้าย selectedFiles และ globalPreviews ไปเป็น AppState (state.js)
+// AppState โหลดก่อน app.js ใน index.html — ใช้งานได้ทันที
 
 // ================= INITIALIZATION =================
 document.addEventListener('DOMContentLoaded', () => {
@@ -32,7 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function handleFileSelect(event) {
     const newFiles = Array.from(event.target.files);
-    selectedFiles = selectedFiles.concat(newFiles);
+    AppState.addFiles(newFiles); // [B3] แทน: selectedFiles = selectedFiles.concat(newFiles)
     event.target.value = '';
     renderQueue();
 }
@@ -41,7 +41,7 @@ function renderQueue() {
     const section = document.getElementById('queueSection');
     const list = document.getElementById('fileQueueList');
 
-    if (selectedFiles.length === 0) {
+    if (AppState.getFileCount() === 0) { // [B3] แทน: selectedFiles.length === 0
         section.classList.add('hidden');
         return;
     }
@@ -49,7 +49,7 @@ function renderQueue() {
     section.classList.remove('hidden');
     list.innerHTML = '';
 
-    selectedFiles.forEach((file, index) => {
+    AppState.getFiles().forEach((file, index) => { // [B3] แทน: selectedFiles.forEach
         const li = document.createElement('li');
         const sizeKB = (file.size / 1024).toFixed(2);
 
@@ -89,7 +89,7 @@ function renderUploadedFiles(results) {
 
         if (file.status === "success") {
             if (file.preview) {
-                globalPreviews[file.file_id] = file.preview;
+                AppState.setPreview(file.file_id, file.preview); // [B3] แทน: globalPreviews[file.file_id] = file.preview
             }
 
             // [A1-FIX] แทน innerHTML ด้วย createElement ทั้งหมด
@@ -160,7 +160,7 @@ function showPreview(fileId, filename) {
     document.getElementById('tableContainer').innerHTML = '';
     document.getElementById('jsonPreview').textContent = '';
 
-    const previewData = globalPreviews[fileId];
+    const previewData = AppState.getPreview(fileId); // [B3] แทน: globalPreviews[fileId]
 
     if (!previewData || previewData.length === 0) {
         // [A1-FIX] ส่วนนี้ไม่มี User Data จึงปลอดภัยที่จะใช้ innerHTML กับ Static String
@@ -203,7 +203,7 @@ function showPreview(fileId, filename) {
 // ================= API & BUSINESS LOGIC =================
 
 function removeFile(index) {
-    selectedFiles.splice(index, 1);
+    AppState.removeFile(index); // [B3] แทน: selectedFiles.splice(index, 1)
     renderQueue();
 }
 
@@ -236,14 +236,14 @@ async function uploadBatch(batchFiles) {
 async function uploadFile() {
     const status = document.getElementById('uploadStatus');
 
-    if (selectedFiles.length === 0) {
+    if (AppState.getFileCount() === 0) { // [B3] แทน: selectedFiles.length === 0
         status.className = "status-red";
         status.textContent = "Please select at least one file from the queue.";
         return;
     }
 
     const batchSize = 5;
-    const totalBatches = Math.ceil(selectedFiles.length / batchSize);
+    const totalBatches = Math.ceil(AppState.getFileCount() / batchSize); // [B3] แทน: selectedFiles.length
     let allUploadedFiles = [];
     let filesProcessed = 0;
     const maxRetries = 3;
@@ -254,7 +254,7 @@ async function uploadFile() {
         for (let i = 0; i < totalBatches; i++) {
             const startIdx = i * batchSize;
             const endIdx = startIdx + batchSize;
-            const batchFiles = selectedFiles.slice(startIdx, endIdx);
+            const batchFiles = AppState.sliceFiles(startIdx, endIdx); // [B3] แทน: selectedFiles.slice
 
             let attempts = 0;
             let batchSuccess = false;
@@ -293,7 +293,7 @@ async function uploadFile() {
         status.className = "status-green";
         status.textContent = `Success! Processed ${allUploadedFiles.length} file(s) across ${totalBatches} batch(es).`;
 
-        selectedFiles = [];
+        AppState.clearFiles(); // [B3] แทน: selectedFiles = []
         renderQueue();
         renderUploadedFiles(allUploadedFiles);
 
@@ -306,7 +306,7 @@ async function uploadFile() {
         }
 
         if (filesProcessed > 0) {
-            selectedFiles = selectedFiles.slice(filesProcessed);
+            AppState.trimFiles(filesProcessed); // [B3] แทน: selectedFiles = selectedFiles.slice(filesProcessed)
             renderQueue();
         }
     }
