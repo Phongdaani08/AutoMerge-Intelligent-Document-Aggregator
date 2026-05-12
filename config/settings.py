@@ -1,27 +1,35 @@
 import os
-from dotenv import load_dotenv
+from typing import List
 from pydantic_settings import BaseSettings
 
-load_dotenv()
-
 class Settings(BaseSettings):
-    PROJECT_NAME: str = os.getenv("PROJECT_NAME", "AutoMerge Document Aggregator")
-    VERSION: str = os.getenv("VERSION", "0.1.0")
-    
+    PROJECT_NAME: str = "AutoMerge Document Aggregator"
+    VERSION: str = "0.1.0"
+
     # Database
-    DATABASE_URL: str = os.getenv("DATABASE_URL")
-    
+    DATABASE_URL: str
+
     # Security
-    SECRET_KEY: str = os.getenv("SECRET_KEY")
-    ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
-    
+    SECRET_KEY: str
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+
     # Upload settings
-    MAX_UPLOAD_SIZE: int = int(os.getenv("MAX_UPLOAD_SIZE", str(10 * 1024 * 1024)))
-    UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", "temp_uploads")
+    MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10MB default
+    UPLOAD_DIR: str = "temp_uploads"
     ALLOWED_EXTENSIONS: set = {".xlsx", ".csv"}
 
-    class Config:
-        env_file = ".env"
+    # [A3] CORS — โหลดจาก .env แบบ List โดย parse จาก String คั่นด้วย comma
+    ALLOWED_ORIGINS: str = "http://localhost:5500,http://127.0.0.1:5500"
+
+    def get_allowed_origins_list(self) -> List[str]:
+        """แปลง ALLOWED_ORIGINS string เป็น list สำหรับ CORSMiddleware"""
+        return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",") if origin.strip()]
+
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
 settings = Settings()

@@ -1,3 +1,23 @@
+// ================= CONFIG =================
+// อ่าน API_BASE_URL จาก config.js ที่โหลดก่อนหน้า
+// ถ้าไม่มี config.js (เช่นเปิดไฟล์โดยตรง) ให้ fallback เป็น localhost
+const API_BASE_URL = (window.APP_CONFIG && window.APP_CONFIG.API_BASE_URL)
+    ? window.APP_CONFIG.API_BASE_URL
+    : 'http://localhost:8000';
+
+// ================= SECURITY HELPER =================
+/**
+ * [A1] XSS Prevention Helper
+ * แปลง String ให้ปลอดภัยก่อนแสดงใน DOM
+ * ใช้ทุกครั้งที่ข้อมูลมาจาก User Input หรือ API Response
+ */
+function escapeHTML(str) {
+    if (str === null || str === undefined) return '';
+    const div = document.createElement('div');
+    div.appendChild(document.createTextNode(String(str)));
+    return div.innerHTML;
+}
+
 // ================= STATE =================
 let selectedFiles = [];
 let globalPreviews = {}; // Store previews by fileId
@@ -33,9 +53,18 @@ function renderQueue() {
         const li = document.createElement('li');
         const sizeKB = (file.size / 1024).toFixed(2);
 
+        // [A1-FIX] แทน innerHTML ด้วย createElement + textContent
+        // ป้องกันกรณีชื่อไฟล์มี <script> หรือ HTML Tag แปลกๆ
         const textSpan = document.createElement('span');
-        textSpan.innerHTML = `<strong>${file.name}</strong> <span class="file-size">(${sizeKB} KB)</span>`;
-        
+        const strong = document.createElement('strong');
+        strong.textContent = file.name; // SAFE: textContent ไม่ parse HTML
+        const sizeSpan = document.createElement('span');
+        sizeSpan.className = 'file-size';
+        sizeSpan.textContent = `(${sizeKB} KB)`;
+        textSpan.appendChild(strong);
+        textSpan.appendChild(document.createTextNode(' '));
+        textSpan.appendChild(sizeSpan);
+
         const removeBtn = document.createElement('button');
         removeBtn.type = 'button';
         removeBtn.className = 'btn-danger';
@@ -57,15 +86,30 @@ function renderUploadedFiles(results) {
 
     results.forEach(file => {
         const li = document.createElement('li');
-        
+
         if (file.status === "success") {
             if (file.preview) {
                 globalPreviews[file.file_id] = file.preview;
             }
 
+            // [A1-FIX] แทน innerHTML ด้วย createElement ทั้งหมด
+            // file.filename และ file.file_id มาจาก API — ต้องป้องกัน XSS
             const textSpan = document.createElement('span');
-            textSpan.innerHTML = `<strong>${file.filename}</strong> (ID: ${file.file_id}) <span id="statusSpan_${file.file_id}" class="file-status status-blue">Saving to DB...</span>`;
-            
+
+            const strong = document.createElement('strong');
+            strong.textContent = file.filename; // SAFE
+
+            const idText = document.createTextNode(` (ID: ${escapeHTML(String(file.file_id))})\u00a0`);
+
+            const statusSpan = document.createElement('span');
+            statusSpan.id = `statusSpan_${file.file_id}`;
+            statusSpan.className = 'file-status status-blue';
+            statusSpan.textContent = 'Saving to DB...'; // SAFE: static text
+
+            textSpan.appendChild(strong);
+            textSpan.appendChild(idText);
+            textSpan.appendChild(statusSpan);
+
             const previewBtn = document.createElement('button');
             previewBtn.type = 'button';
             previewBtn.className = 'btn-info';
@@ -77,13 +121,33 @@ function renderUploadedFiles(results) {
             list.appendChild(li);
 
             startPolling(file.file_id);
-            
+
         } else if (file.status === "duplicate") {
-            li.innerHTML = `<span><strong>${file.filename}</strong> <span class="file-status status-orange">Duplicate: ${file.message}</span></span>`;
+            // [A1-FIX] แทน innerHTML ด้วย createElement
+            const outerSpan = document.createElement('span');
+            const strong = document.createElement('strong');
+            strong.textContent = file.filename; // SAFE
+            const statusSpan = document.createElement('span');
+            statusSpan.className = 'file-status status-orange';
+            statusSpan.textContent = `Duplicate: ${file.message}`; // SAFE: textContent
+            outerSpan.appendChild(strong);
+            outerSpan.appendChild(document.createTextNode(' '));
+            outerSpan.appendChild(statusSpan);
+            li.appendChild(outerSpan);
             list.appendChild(li);
-            
+
         } else if (file.status === "failed") {
-            li.innerHTML = `<span><strong>${file.filename}</strong> <span class="file-status status-red">Failed: ${file.message}</span></span>`;
+            // [A1-FIX] แทน innerHTML ด้วย createElement
+            const outerSpan = document.createElement('span');
+            const strong = document.createElement('strong');
+            strong.textContent = file.filename; // SAFE
+            const statusSpan = document.createElement('span');
+            statusSpan.className = 'file-status status-red';
+            statusSpan.textContent = `Failed: ${file.message}`; // SAFE: textContent
+            outerSpan.appendChild(strong);
+            outerSpan.appendChild(document.createTextNode(' '));
+            outerSpan.appendChild(statusSpan);
+            li.appendChild(outerSpan);
             list.appendChild(li);
         }
     });
@@ -91,32 +155,49 @@ function renderUploadedFiles(results) {
 
 function showPreview(fileId, filename) {
     const previewTitle = document.getElementById('previewTitle');
-    previewTitle.innerText = `Data Preview: ${filename} (First 10 rows)`;
+    previewTitle.textContent = `Data Preview: ${filename} (First 10 rows)`; // SAFE: textContent
     document.getElementById('previewSection').classList.remove('hidden');
     document.getElementById('tableContainer').innerHTML = '';
-    document.getElementById('jsonPreview').innerText = '';
+    document.getElementById('jsonPreview').textContent = '';
 
     const previewData = globalPreviews[fileId];
 
     if (!previewData || previewData.length === 0) {
+        // [A1-FIX] ส่วนนี้ไม่มี User Data จึงปลอดภัยที่จะใช้ innerHTML กับ Static String
         document.getElementById('tableContainer').innerHTML = '<p class="error-text">No instant preview available for this file.</p>';
         return;
     }
 
-    document.getElementById('jsonPreview').innerText = JSON.stringify(previewData, null, 2);
+    document.getElementById('jsonPreview').textContent = JSON.stringify(previewData, null, 2); // SAFE: textContent
+
+    // [A1-FIX] สร้าง Table ด้วย createElement แทน String Concatenation
+    // Column Headers และ Cell Values มาจากไฟล์ที่ผู้ใช้อัปโหลด — ต้องป้องกัน XSS ทุกตัว
+    const table = document.createElement('table');
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
 
     const keys = Object.keys(previewData[0]);
-    let tableHTML = '<table><tr>';
-    keys.forEach(k => tableHTML += `<th>${k}</th>`);
-    tableHTML += '</tr>';
-
-    previewData.forEach(row => {
-        tableHTML += '<tr>';
-        keys.forEach(k => tableHTML += `<td>${row[k] !== null ? row[k] : ''}</td>`);
-        tableHTML += '</tr>';
+    keys.forEach(k => {
+        const th = document.createElement('th');
+        th.textContent = k; // SAFE: textContent ป้องกัน Column Name ที่เป็น HTML
+        headerRow.appendChild(th);
     });
-    tableHTML += '</table>';
-    document.getElementById('tableContainer').innerHTML = tableHTML;
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    previewData.forEach(row => {
+        const tr = document.createElement('tr');
+        keys.forEach(k => {
+            const td = document.createElement('td');
+            td.textContent = row[k] !== null ? row[k] : ''; // SAFE: textContent
+            tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+
+    document.getElementById('tableContainer').appendChild(table);
 }
 
 // ================= API & BUSINESS LOGIC =================
@@ -131,9 +212,10 @@ async function uploadBatch(batchFiles) {
     for (let i = 0; i < batchFiles.length; i++) {
         formData.append("files", batchFiles[i]);
     }
-    
+
     try {
-        const response = await fetch('http://localhost:8000/api/v1/upload', {
+        // [A2-FIX] ใช้ API_BASE_URL จาก config แทน Hardcoded localhost
+        const response = await fetch(`${API_BASE_URL}/api/v1/upload`, {
             method: 'POST',
             body: formData
         });
@@ -156,7 +238,7 @@ async function uploadFile() {
 
     if (selectedFiles.length === 0) {
         status.className = "status-red";
-        status.innerText = "Please select at least one file from the queue.";
+        status.textContent = "Please select at least one file from the queue.";
         return;
     }
 
@@ -167,36 +249,36 @@ async function uploadFile() {
     const maxRetries = 3;
 
     status.className = "status-blue";
-    
+
     try {
         for (let i = 0; i < totalBatches; i++) {
             const startIdx = i * batchSize;
             const endIdx = startIdx + batchSize;
             const batchFiles = selectedFiles.slice(startIdx, endIdx);
-            
+
             let attempts = 0;
             let batchSuccess = false;
-            
+
             while (attempts <= maxRetries && !batchSuccess) {
                 try {
                     if (attempts === 0) {
-                        status.innerText = `Uploading batch ${i + 1} of ${totalBatches}... Please wait.`;
+                        status.textContent = `Uploading batch ${i + 1} of ${totalBatches}... Please wait.`;
                     } else {
                         status.className = "status-orange";
-                        status.innerText = `Batch ${i + 1}/${totalBatches} - Retrying... Attempt ${attempts}/${maxRetries}`;
+                        status.textContent = `Batch ${i + 1}/${totalBatches} - Retrying... Attempt ${attempts}/${maxRetries}`;
                     }
-                    
+
                     const result = await uploadBatch(batchFiles);
                     if (result.results) {
                         allUploadedFiles = allUploadedFiles.concat(result.results);
                     }
                     filesProcessed += batchFiles.length;
                     batchSuccess = true;
-                    status.className = "status-blue"; // reset color on success
+                    status.className = "status-blue";
                 } catch (error) {
-                    const isNetworkError = !error.status; 
+                    const isNetworkError = !error.status;
                     const isServerError = error.status >= 500 && error.status < 600;
-                    
+
                     if ((isNetworkError || isServerError) && attempts < maxRetries) {
                         attempts++;
                         console.warn(`Batch ${i + 1} failed. Retrying in 5 seconds...`, error.message);
@@ -209,20 +291,20 @@ async function uploadFile() {
         }
 
         status.className = "status-green";
-        status.innerText = `Success! Processed ${allUploadedFiles.length} file(s) across ${totalBatches} batch(es).`;
+        status.textContent = `Success! Processed ${allUploadedFiles.length} file(s) across ${totalBatches} batch(es).`;
 
         selectedFiles = [];
         renderQueue();
         renderUploadedFiles(allUploadedFiles);
-        
+
     } catch (error) {
         status.className = "status-red";
-        status.innerText = "Upload stopped: " + error.message;
-        
+        status.textContent = "Upload stopped: " + error.message;
+
         if (allUploadedFiles.length > 0) {
             renderUploadedFiles(allUploadedFiles);
         }
-        
+
         if (filesProcessed > 0) {
             selectedFiles = selectedFiles.slice(filesProcessed);
             renderQueue();
@@ -230,30 +312,55 @@ async function uploadFile() {
     }
 }
 
-async function startPolling(fileId) {
+// [A5-FIX] เพิ่ม maxAttempts เพื่อป้องกัน setInterval วิ่งตลอดไป
+// หลัง 30 ครั้ง × 2 วินาที = 60 วินาที จะหยุดอัตโนมัติและแสดง Timeout
+async function startPolling(fileId, maxAttempts = 30) {
     const span = document.getElementById(`statusSpan_${fileId}`);
+    let attempts = 0;
 
     const interval = setInterval(async () => {
+        attempts++;
+
+        // [A5-FIX] Guard: หยุด Polling เมื่อเกิน maxAttempts
+        if (attempts > maxAttempts) {
+            clearInterval(interval);
+            if (span) {
+                span.textContent = 'Timeout: Status check stopped';
+                span.className = 'file-status status-orange';
+            }
+            console.warn(`[Polling] Stopped for fileId=${fileId} after ${maxAttempts} attempts.`);
+            return;
+        }
+
         try {
-            const response = await fetch(`http://localhost:8000/api/v1/status/${fileId}`);
+            // [A2-FIX] ใช้ API_BASE_URL จาก config แทน Hardcoded localhost
+            const response = await fetch(`${API_BASE_URL}/api/v1/status/${fileId}`);
             if (response.ok) {
                 const result = await response.json();
                 if (result.status === "completed") {
                     clearInterval(interval);
-                    span.innerText = "Saved to DB";
-                    span.className = "file-status status-green";
+                    if (span) {
+                        span.textContent = "Saved to DB";
+                        span.className = "file-status status-green";
+                    }
                 } else if (result.status === "failed") {
                     clearInterval(interval);
-                    span.innerText = "DB Error (Rolled back)";
-                    span.className = "file-status status-red";
+                    if (span) {
+                        span.textContent = "DB Error (Rolled back)";
+                        span.className = "file-status status-red";
+                    }
                 }
+                // ถ้าเป็น "uploaded" หรือ "processing" ให้ Poll ต่อตามปกติ
             } else {
                 clearInterval(interval);
-                span.innerText = "Status Unknown";
-                span.className = "file-status status-red";
+                if (span) {
+                    span.textContent = "Status Unknown";
+                    span.className = "file-status status-red";
+                }
             }
         } catch (error) {
             console.error(`Error polling status for ${fileId}:`, error);
+            // ไม่ clearInterval ทันที — ให้ Retry ต่อจนถึง maxAttempts
         }
     }, 2000);
 }

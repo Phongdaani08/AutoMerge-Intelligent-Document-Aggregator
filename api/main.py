@@ -37,7 +37,7 @@ app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.get_allowed_origins_list(),  # [A3] จำกัดเฉพาะ Origin ที่กำหนดใน .env
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
