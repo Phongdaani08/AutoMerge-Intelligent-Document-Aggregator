@@ -1,0 +1,60 @@
+/* ==========================================================
+   tokens.css — Design Tokens (CSS Custom Properties)
+   ==========================================================
+   [B2] รวมค่าคงที่ทุกตัวไว้ที่นี่ที่เดียว
+   เมื่อต้องการเปลี่ยนสี/spacing ทั้งระบบ — แก้ที่ไฟล์นี้ที่เดียวพอ
+   ไม่มี Selector ที่นี่ — เป็น Variables ล้วนๆ
+   ========================================================== */
+
+:root {
+    /* --- Colors: Brand --- */
+    --color-primary:        #007bff;
+    --color-primary-hover:  #0056b3;
+    --color-danger:         #dc3545;
+    --color-danger-hover:   #c82333;
+    --color-info:           #17a2b8;
+    --color-info-hover:     #138496;
+
+    /* --- Colors: Background --- */
+    --color-bg-page:        #f5f5f5;
+    --color-bg-card:        #ffffff;
+    --color-bg-section:     #fdfdfd;
+    --color-bg-pre:         #f8f9fa;
+    --color-bg-th:          #f2f2f2;
+
+    /* --- Colors: Border --- */
+    --color-border:         #ccc;
+    --color-border-light:   #eee;
+    --color-border-table:   #ddd;
+
+    /* --- Colors: Text --- */
+    --color-text-muted:     #888;
+    --color-text-help:      #666;
+
+    /* --- Colors: Status --- */
+    --color-status-blue:    blue;
+    --color-status-green:   green;
+    --color-status-orange:  orange;
+    --color-status-red:     red;
+    --color-error:          red;
+
+    /* --- Spacing --- */
+    --spacing-xs:   5px;
+    --spacing-sm:   8px;
+    --spacing-md:   10px;
+    --spacing-lg:   15px;
+    --spacing-xl:   20px;
+    --spacing-2xl:  30px;
+
+    /* --- Border Radius --- */
+    --radius-sm:    4px;
+    --radius-md:    8px;
+    --radius-pre:   5px;
+
+    /* --- Typography --- */
+    --font-family-base: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    --font-size-sm:     0.9em;
+
+    /* --- Shadow --- */
+    --shadow-card: 0 2px 4px rgba(0, 0, 0, 0.1);
+}

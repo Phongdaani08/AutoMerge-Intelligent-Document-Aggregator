@@ -1,0 +1,21 @@
+/* ==========================================================
+   layout.css — Page Layout & Structure
+   ==========================================================
+   [B2] โครงสร้างระดับหน้า (body + container wrapper)
+   ใช้ tokens จาก tokens.css ผ่าน var()
+   ========================================================== */
+
+body {
+    font-family: var(--font-family-base);
+    padding: var(--spacing-xl);
+    background-color: var(--color-bg-page);
+}
+
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+    background: var(--color-bg-card);
+    padding: var(--spacing-xl);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-card);
+}

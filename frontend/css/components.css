@@ -1,0 +1,155 @@
+/* ==========================================================
+   components.css — UI Component Styles
+   ==========================================================
+   [B2] Styles ระดับ Component ทั้งหมด
+   อ้างอิง tokens ผ่าน var() — ไม่มี Hardcoded ค่าสีหรือ spacing
+   body และ .container ถูกย้ายไป layout.css แล้ว
+   ========================================================== */
+
+/* --- Upload Section --- */
+.upload-section {
+    margin-bottom: var(--spacing-xl);
+    padding: var(--spacing-xl);
+    border: 2px dashed var(--color-border);
+    text-align: center;
+    border-radius: var(--radius-md);
+}
+
+/* --- Queue & Uploaded Sections --- */
+.queue-section,
+.uploaded-section {
+    margin-bottom: var(--spacing-xl);
+    padding: var(--spacing-lg);
+    background: var(--color-bg-section);
+    border: 1px solid var(--color-border-light);
+    border-radius: var(--radius-md);
+}
+
+/* --- File List --- */
+.queue-list {
+    list-style-type: none;
+    padding: 0;
+    margin: 0;
+}
+
+.queue-list li {
+    padding: var(--spacing-sm) 0;
+    border-bottom: 1px solid var(--color-border-light);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.queue-list li:last-child {
+    border-bottom: none;
+}
+
+/* --- Buttons --- */
+button {
+    background-color: var(--color-primary);
+    color: white;
+    border: none;
+    padding: var(--spacing-md) var(--spacing-xl);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+
+button:hover {
+    background-color: var(--color-primary-hover);
+}
+
+button.btn-danger {
+    background-color: var(--color-danger);
+    padding: var(--spacing-xs) var(--spacing-md);
+    font-size: var(--font-size-sm);
+}
+
+button.btn-danger:hover {
+    background-color: var(--color-danger-hover);
+}
+
+button.btn-info {
+    background-color: var(--color-info);
+    padding: var(--spacing-xs) var(--spacing-md);
+    font-size: var(--font-size-sm);
+}
+
+button.btn-info:hover {
+    background-color: var(--color-info-hover);
+}
+
+/* --- JSON Preview Block --- */
+pre {
+    background: var(--color-bg-pre);
+    padding: var(--spacing-lg);
+    border-radius: var(--radius-pre);
+    overflow-x: auto;
+}
+
+/* --- Data Table --- */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: var(--spacing-xl);
+}
+
+th,
+td {
+    border: 1px solid var(--color-border-table);
+    padding: var(--spacing-sm);
+    text-align: left;
+}
+
+th {
+    background-color: var(--color-bg-th);
+}
+
+/* --- Specific Element Styles --- */
+#uploadStatus {
+    margin-top: var(--spacing-md);
+    font-weight: bold;
+}
+
+.help-text {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-help);
+}
+
+#previewSection {
+    margin-top: var(--spacing-2xl);
+}
+
+.file-size {
+    color: var(--color-text-muted);
+}
+
+.file-status {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    margin-left: var(--spacing-md);
+}
+
+.error-text {
+    color: var(--color-error);
+}
+
+/* --- Utility Classes --- */
+.hidden {
+    display: none !important;
+}
+
+.status-blue {
+    color: var(--color-status-blue);
+}
+
+.status-green {
+    color: var(--color-status-green);
+}
+
+.status-orange {
+    color: var(--color-status-orange);
+}
+
+.status-red {
+    color: var(--color-status-red);
+}
