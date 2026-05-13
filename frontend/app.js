@@ -1,10 +1,3 @@
-// ================= CONFIG =================
-// อ่าน API_BASE_URL จาก config.js ที่โหลดก่อนหน้า
-// ถ้าไม่มี config.js (เช่นเปิดไฟล์โดยตรง) ให้ fallback เป็น localhost
-const API_BASE_URL = (window.APP_CONFIG && window.APP_CONFIG.API_BASE_URL)
-    ? window.APP_CONFIG.API_BASE_URL
-    : 'http://localhost:8000';
-
 // ================= SECURITY HELPER =================
 /**
  * [A1] XSS Prevention Helper
@@ -22,6 +15,42 @@ function escapeHTML(str) {
 // [B3] ย้าย selectedFiles และ globalPreviews ไปเป็น AppState (state.js)
 // AppState โหลดก่อน app.js ใน index.html — ใช้งานได้ทันที
 
+// ================= DOM ELEMENTS =================
+const fileInput = document.getElementById('fileInput');
+const dropZone = document.getElementById('dropZone');
+const queueList = document.getElementById('queueList');
+const uploadBtn = document.getElementById('uploadBtn');
+
+// ================= LIFECYCLE & CANCELLATION =================
+let globalUploadController = null;
+const activePollers = new Map();
+
+function updatePollingDOM(fileId, className, text, stopPolling = false) {
+    const span = document.getElementById(`statusSpan_${fileId}`);
+    if (!span) {
+        console.warn(`[DOM] Element statusSpan_${fileId} missing, clearing poller.`);
+        if (activePollers.has(fileId)) {
+            activePollers.get(fileId).stop();
+            activePollers.delete(fileId);
+        }
+        return;
+    }
+    span.textContent = text;
+    span.className = `file-status ${className}`;
+    if (stopPolling) {
+        activePollers.delete(fileId);
+    }
+}
+
+// ================= EVENT LISTENERS =================
+
+function handleFileSelect(event) {
+    const newFiles = Array.from(event.target.files);
+    AppState.addFiles(newFiles); // [B3] แทน: selectedFiles = selectedFiles.concat(newFiles)
+    event.target.value = '';
+    renderQueue();
+}
+
 // ================= INITIALIZATION =================
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('fileInput').addEventListener('change', handleFileSelect);
@@ -30,12 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ================= DOM/UI RENDERING =================
 
-function handleFileSelect(event) {
-    const newFiles = Array.from(event.target.files);
-    AppState.addFiles(newFiles); // [B3] แทน: selectedFiles = selectedFiles.concat(newFiles)
-    event.target.value = '';
-    renderQueue();
-}
+
 
 function renderQueue() {
     const section = document.getElementById('queueSection');
@@ -120,7 +144,18 @@ function renderUploadedFiles(results) {
             li.appendChild(previewBtn);
             list.appendChild(li);
 
-            startPolling(file.file_id);
+            if (activePollers.has(file.file_id)) {
+                activePollers.get(file.file_id).stop();
+            }
+
+            // [B4] ใช้ API.startPolling ส่ง callback กลับมาอัปเดต DOM
+            const poller = API.startPolling(file.file_id, {
+                maxAttempts: 30,
+                onComplete: (msg) => updatePollingDOM(file.file_id, "status-green", msg, true),
+                onError: (msg) => updatePollingDOM(file.file_id, "status-red", msg, true),
+                onTimeout: (msg) => updatePollingDOM(file.file_id, "status-orange", msg, true)
+            });
+            activePollers.set(file.file_id, poller);
 
         } else if (file.status === "duplicate") {
             // [A1-FIX] แทน innerHTML ด้วย createElement
@@ -207,32 +242,6 @@ function removeFile(index) {
     renderQueue();
 }
 
-async function uploadBatch(batchFiles) {
-    const formData = new FormData();
-    for (let i = 0; i < batchFiles.length; i++) {
-        formData.append("files", batchFiles[i]);
-    }
-
-    try {
-        // [A2-FIX] ใช้ API_BASE_URL จาก config แทน Hardcoded localhost
-        const response = await fetch(`${API_BASE_URL}/api/v1/upload`, {
-            method: 'POST',
-            body: formData
-        });
-
-        if (!response.ok) {
-            const errorRes = await response.json().catch(() => ({}));
-            const errorMsg = errorRes.detail || "Unknown error during batch upload";
-            const error = new Error(errorMsg);
-            error.status = response.status;
-            throw error;
-        }
-        return await response.json();
-    } catch (err) {
-        throw err;
-    }
-}
-
 async function uploadFile() {
     const status = document.getElementById('uploadStatus');
 
@@ -241,6 +250,12 @@ async function uploadFile() {
         status.textContent = "Please select at least one file from the queue.";
         return;
     }
+
+    if (globalUploadController) {
+        globalUploadController.abort();
+    }
+    globalUploadController = new AbortController();
+    const signal = globalUploadController.signal;
 
     const batchSize = 5;
     const totalBatches = Math.ceil(AppState.getFileCount() / batchSize); // [B3] แทน: selectedFiles.length
@@ -256,38 +271,27 @@ async function uploadFile() {
             const endIdx = startIdx + batchSize;
             const batchFiles = AppState.sliceFiles(startIdx, endIdx); // [B3] แทน: selectedFiles.slice
 
-            let attempts = 0;
-            let batchSuccess = false;
-
-            while (attempts <= maxRetries && !batchSuccess) {
-                try {
+            // [B4] Use API.uploadWithRetry
+            const result = await API.uploadWithRetry({
+                batchFiles,
+                maxRetries,
+                signal,
+                onRetry: (attempts, max) => {
                     if (attempts === 0) {
                         status.textContent = `Uploading batch ${i + 1} of ${totalBatches}... Please wait.`;
+                        status.className = "status-blue";
                     } else {
                         status.className = "status-orange";
-                        status.textContent = `Batch ${i + 1}/${totalBatches} - Retrying... Attempt ${attempts}/${maxRetries}`;
-                    }
-
-                    const result = await uploadBatch(batchFiles);
-                    if (result.results) {
-                        allUploadedFiles = allUploadedFiles.concat(result.results);
-                    }
-                    filesProcessed += batchFiles.length;
-                    batchSuccess = true;
-                    status.className = "status-blue";
-                } catch (error) {
-                    const isNetworkError = !error.status;
-                    const isServerError = error.status >= 500 && error.status < 600;
-
-                    if ((isNetworkError || isServerError) && attempts < maxRetries) {
-                        attempts++;
-                        console.warn(`Batch ${i + 1} failed. Retrying in 5 seconds...`, error.message);
-                        await new Promise(resolve => setTimeout(resolve, 5000));
-                    } else {
-                        throw error;
+                        status.textContent = `Batch ${i + 1}/${totalBatches} - Retrying... Attempt ${attempts}/${max}`;
                     }
                 }
+            });
+
+            if (result && result.success && result.data && result.data.results) {
+                allUploadedFiles = allUploadedFiles.concat(result.data.results);
             }
+            filesProcessed += batchFiles.length;
+            status.className = "status-blue";
         }
 
         status.className = "status-green";
@@ -298,6 +302,12 @@ async function uploadFile() {
         renderUploadedFiles(allUploadedFiles);
 
     } catch (error) {
+        if (error.name === 'AbortError') {
+            status.className = "status-orange";
+            status.textContent = "Upload cancelled.";
+            return;
+        }
+
         status.className = "status-red";
         status.textContent = "Upload stopped: " + error.message;
 
@@ -309,58 +319,8 @@ async function uploadFile() {
             AppState.trimFiles(filesProcessed); // [B3] แทน: selectedFiles = selectedFiles.slice(filesProcessed)
             renderQueue();
         }
+    } finally {
+        globalUploadController = null;
     }
 }
 
-// [A5-FIX] เพิ่ม maxAttempts เพื่อป้องกัน setInterval วิ่งตลอดไป
-// หลัง 30 ครั้ง × 2 วินาที = 60 วินาที จะหยุดอัตโนมัติและแสดง Timeout
-async function startPolling(fileId, maxAttempts = 30) {
-    const span = document.getElementById(`statusSpan_${fileId}`);
-    let attempts = 0;
-
-    const interval = setInterval(async () => {
-        attempts++;
-
-        // [A5-FIX] Guard: หยุด Polling เมื่อเกิน maxAttempts
-        if (attempts > maxAttempts) {
-            clearInterval(interval);
-            if (span) {
-                span.textContent = 'Timeout: Status check stopped';
-                span.className = 'file-status status-orange';
-            }
-            console.warn(`[Polling] Stopped for fileId=${fileId} after ${maxAttempts} attempts.`);
-            return;
-        }
-
-        try {
-            // [A2-FIX] ใช้ API_BASE_URL จาก config แทน Hardcoded localhost
-            const response = await fetch(`${API_BASE_URL}/api/v1/status/${fileId}`);
-            if (response.ok) {
-                const result = await response.json();
-                if (result.status === "completed") {
-                    clearInterval(interval);
-                    if (span) {
-                        span.textContent = "Saved to DB";
-                        span.className = "file-status status-green";
-                    }
-                } else if (result.status === "failed") {
-                    clearInterval(interval);
-                    if (span) {
-                        span.textContent = "DB Error (Rolled back)";
-                        span.className = "file-status status-red";
-                    }
-                }
-                // ถ้าเป็น "uploaded" หรือ "processing" ให้ Poll ต่อตามปกติ
-            } else {
-                clearInterval(interval);
-                if (span) {
-                    span.textContent = "Status Unknown";
-                    span.className = "file-status status-red";
-                }
-            }
-        } catch (error) {
-            console.error(`Error polling status for ${fileId}:`, error);
-            // ไม่ clearInterval ทันที — ให้ Retry ต่อจนถึง maxAttempts
-        }
-    }, 2000);
-}
